@@ -1,0 +1,5 @@
+# Add your files here:
+#   audio.mp3  (or .wav / .m4a / .ogg)  — required
+#   cover.jpg  (or .png / .webp / .jpeg) — optional
+#
+# This folder will appear on the site only after audio is present.
