@@ -22,8 +22,8 @@ export function HeroDemo() {
         <div className="mx-auto h-36 w-36 overflow-hidden rounded-2xl bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg md:mx-0 md:h-full md:w-full md:max-w-[140px]">
           <div className="flex h-full flex-col items-center justify-center p-3 text-center">
             <p className="text-xs uppercase tracking-widest text-white/70">Demo</p>
-            <p className="mt-2 text-lg font-bold text-white">Midnight Drive</p>
-            <p className="text-sm text-white/80">Alex Carter</p>
+            <p className="mt-2 text-lg font-bold text-white">Tu hai</p>
+            <p className="text-sm text-white/80">ratnesh singh parhar</p>
           </div>
         </div>
 
