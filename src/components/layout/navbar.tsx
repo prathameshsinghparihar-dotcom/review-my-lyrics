@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Compass, Home, Search } from "lucide-react";
+import { Compass, Home, Search, Upload } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,9 @@ export function Navbar() {
           </Link>
           <Link href="/discover" className={linkClass("/songs")}>
             Songs
+          </Link>
+          <Link href="/publish" className={linkClass("/publish")}>
+            Publish
           </Link>
         </nav>
 
@@ -74,12 +77,13 @@ export function MobileNav() {
   const items = [
     { href: "/", label: "Home", icon: Home },
     { href: "/discover", label: "Discover", icon: Compass },
+    { href: "/publish", label: "Publish", icon: Upload },
     { href: "/search", label: "Search", icon: Search },
   ];
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-zinc-800 bg-zinc-950/95 backdrop-blur md:hidden">
-      <ul className="grid grid-cols-3">
+      <ul className="grid grid-cols-4">
         {items.map((item) => {
           const Icon = item.icon;
           const active =
