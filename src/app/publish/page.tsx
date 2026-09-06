@@ -14,6 +14,49 @@ import { GENRES } from "@/types/database";
 import { parseLyrics } from "@/lib/utils";
 
 const SECRET_KEY = "lyricpulse_publish_secret";
+const MAX_AUDIO = 50 * 1024 * 1024;
+const MAX_COVER = 5 * 1024 * 1024;
+
+type UploadTarget = {
+  path: string;
+  token: string;
+  signedUrl: string;
+  contentType: string;
+};
+
+type PublishResponse = {
+  error?: string;
+  slug?: string;
+  path?: string;
+  lines?: number;
+  uploads?: {
+    audio: UploadTarget;
+    cover: UploadTarget | null;
+  };
+};
+
+function fileExt(file: File, fallback: string): string {
+  const fromName = file.name.split(".").pop()?.toLowerCase();
+  if (fromName) return fromName === "jpeg" ? "jpg" : fromName;
+  return fallback;
+}
+
+async function putToSignedUrl(target: UploadTarget, file: File) {
+  const res = await fetch(target.signedUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": file.type || target.contentType,
+      "x-upsert": "true",
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Upload failed (${res.status})${text ? `: ${text.slice(0, 160)}` : ""}`
+    );
+  }
+}
 
 export default function PublishPage() {
   const router = useRouter();
@@ -89,34 +132,67 @@ export default function PublishPage() {
       toast.error("No lyric lines found — paste one line per row");
       return;
     }
+    if (audio.size > MAX_AUDIO) {
+      toast.error("Audio must be under 50MB");
+      return;
+    }
+    if (cover && cover.size > MAX_COVER) {
+      toast.error("Cover must be under 5MB");
+      return;
+    }
 
     setBusy(true);
     try {
-      const form = new FormData();
-      form.set("secret", secret);
-      form.set("title", title.trim());
-      form.set("artist", artist.trim());
-      form.set("genre", genre);
-      form.set("description", description.trim());
-      form.set("lyrics", lyrics);
-      form.set("audio", audio);
-      if (cover) form.set("cover", cover);
+      const prepareRes = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          secret,
+          title: title.trim(),
+          artist: artist.trim(),
+          genre,
+          description: description.trim(),
+          lyrics,
+          audioExt: fileExt(audio, "mp3"),
+          audioContentType: audio.type || "audio/mpeg",
+          coverExt: cover ? fileExt(cover, "jpg") : null,
+          coverContentType: cover?.type || null,
+        }),
+      });
 
-      const res = await fetch("/api/publish", { method: "POST", body: form });
-      const data = (await res.json()) as {
-        error?: string;
-        slug?: string;
-        path?: string;
-        lines?: number;
-      };
+      const prepareText = await prepareRes.text();
+      let data: PublishResponse;
+      try {
+        data = JSON.parse(prepareText) as PublishResponse;
+      } catch {
+        toast.error(
+          prepareRes.status === 413
+            ? "Request too large for the server."
+            : `Server error (${prepareRes.status}). Check PUBLISH_SECRET and Supabase env vars on Vercel.`
+        );
+        return;
+      }
 
-      if (!res.ok) {
-        toast.error(data.error || "Publish failed");
-        if (res.status === 401) {
+      if (!prepareRes.ok || !data.uploads?.audio) {
+        toast.error(
+          data.error ||
+            (prepareRes.status === 413
+              ? "Request too large for the server."
+              : `Request failed (${prepareRes.status})`)
+        );
+        if (prepareRes.status === 401) {
           sessionStorage.removeItem(SECRET_KEY);
           setUnlocked(false);
         }
         return;
+      }
+
+      toast.message("Uploading audio…");
+      await putToSignedUrl(data.uploads.audio, audio);
+
+      if (cover && data.uploads.cover) {
+        toast.message("Uploading cover…");
+        await putToSignedUrl(data.uploads.cover, cover);
       }
 
       toast.success(
@@ -124,8 +200,9 @@ export default function PublishPage() {
       );
       router.push(data.path || `/songs/${data.slug}`);
       router.refresh();
-    } catch {
-      toast.error("Network error — try again");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Publish failed";
+      toast.error(message.includes("Failed to fetch") ? "Network error — check your connection and Supabase URL" : message);
     } finally {
       setBusy(false);
     }
@@ -163,7 +240,7 @@ export default function PublishPage() {
       <h1 className="text-3xl font-bold">Publish a song</h1>
       <p className="mt-2 text-zinc-400">
         Upload a lyrics <code>.txt</code>, audio, and cover — we create{" "}
-        <code>song.json</code> and upload to Supabase automatically.
+        <code>song.json</code> and upload media straight to Supabase (avoids Vercel size limits).
       </p>
 
       <div className="mt-8 space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 md:p-6">
@@ -261,7 +338,11 @@ export default function PublishPage() {
             accept="audio/mpeg,audio/wav,audio/mp4,audio/ogg,.mp3,.wav,.m4a,.ogg"
             onChange={(e) => setAudio(e.target.files?.[0] || null)}
           />
-          {audio ? <p className="text-xs text-zinc-500">{audio.name}</p> : null}
+          {audio ? (
+            <p className="text-xs text-zinc-500">
+              {audio.name} ({(audio.size / (1024 * 1024)).toFixed(1)} MB)
+            </p>
+          ) : null}
         </div>
 
         <div className="space-y-2">

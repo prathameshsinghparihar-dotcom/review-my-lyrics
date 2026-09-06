@@ -23,7 +23,7 @@ export function HeroDemo() {
           <div className="flex h-full flex-col items-center justify-center p-3 text-center">
             <p className="text-xs uppercase tracking-widest text-white/70">Demo</p>
             <p className="mt-2 text-lg font-bold text-white">Tu hai</p>
-            <p className="text-sm text-white/80">ratnesh singh parhar</p>
+            <p className="text-sm text-white/80">ratnesh singh parihar</p>
           </div>
         </div>
 
