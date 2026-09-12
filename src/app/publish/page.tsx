@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { GENRES } from "@/types/database";
-import { parseLyrics } from "@/lib/utils";
+import { looksLikeSrt, parseLyricsInput } from "@/lib/utils";
 
 const SECRET_KEY = "lyricpulse_publish_secret";
 const MAX_AUDIO = 50 * 1024 * 1024;
@@ -60,14 +60,8 @@ async function putToSignedUrl(target: UploadTarget, file: File) {
 
 export default function PublishPage() {
   const router = useRouter();
-  const [unlocked, setUnlocked] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return !!sessionStorage.getItem(SECRET_KEY);
-  });
-  const [secret, setSecret] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return sessionStorage.getItem(SECRET_KEY) || "";
-  });
+  const [unlocked, setUnlocked] = useState(false);
+  const [secret, setSecret] = useState("");
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [genre, setGenre] = useState("Other");
@@ -78,8 +72,21 @@ export default function PublishPage() {
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const previewLines = useMemo(() => parseLyrics(lyrics).slice(0, 8), [lyrics]);
-  const lineCount = useMemo(() => parseLyrics(lyrics).length, [lyrics]);
+  useEffect(() => {
+    const saved = sessionStorage.getItem(SECRET_KEY);
+    if (saved) {
+      setSecret(saved);
+      setUnlocked(true);
+    }
+  }, []);
+
+  const parsedLyrics = useMemo(() => parseLyricsInput(lyrics), [lyrics]);
+  const previewLines = useMemo(() => parsedLyrics.slice(0, 8), [parsedLyrics]);
+  const lineCount = parsedLyrics.length;
+  const timedCount = useMemo(
+    () => parsedLyrics.filter((l) => l.start != null).length,
+    [parsedLyrics]
+  );
 
   const unlock = () => {
     if (!secret.trim()) {
@@ -100,13 +107,16 @@ export default function PublishPage() {
   const onLyricsFile = async (file: File | null) => {
     if (!file) return;
     const name = file.name.toLowerCase();
-    const okExt = [".txt", ".lrc", ".md", ".text"].some((ext) => name.endsWith(ext));
+    const okExt = [".txt", ".srt", ".lrc", ".md", ".text"].some((ext) =>
+      name.endsWith(ext)
+    );
     const okType =
       !file.type ||
       file.type.startsWith("text/") ||
-      file.type === "application/json";
+      file.type === "application/json" ||
+      file.type === "application/x-subrip";
     if (!okExt && !okType) {
-      toast.error("Use a .txt lyrics file");
+      toast.error("Use a .txt or .srt lyrics file");
       return;
     }
     try {
@@ -117,7 +127,15 @@ export default function PublishPage() {
         return;
       }
       setLyrics(cleaned);
-      toast.success(`Loaded lyrics from ${file.name}`);
+      const parsed = parseLyricsInput(cleaned);
+      const timed = parsed.filter((l) => l.start != null).length;
+      toast.success(
+        looksLikeSrt(cleaned) || name.endsWith(".srt")
+          ? `Loaded ${parsed.length} timed lines from ${file.name}`
+          : timed
+            ? `Loaded ${parsed.length} lines (${timed} timed) from ${file.name}`
+            : `Loaded lyrics from ${file.name}`
+      );
     } catch {
       toast.error("Couldn't read that file");
     }
@@ -239,8 +257,8 @@ export default function PublishPage() {
     <div className="mx-auto max-w-2xl px-4 py-8 md:px-6">
       <h1 className="text-3xl font-bold">Publish a song</h1>
       <p className="mt-2 text-zinc-400">
-        Upload a lyrics <code>.txt</code>, audio, and cover — we create{" "}
-        <code>song.json</code> and upload media straight to Supabase (avoids Vercel size limits).
+        Upload lyrics (<code>.txt</code> or timed <code>.srt</code>), audio, and cover — we create{" "}
+        <code>song.json</code> and upload media straight to Supabase.
       </p>
 
       <div className="mt-8 space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 md:p-6">
@@ -281,18 +299,18 @@ export default function PublishPage() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="lyrics-file">Upload lyrics file (.txt)</Label>
+          <Label htmlFor="lyrics-file">Upload lyrics file (.txt or .srt)</Label>
           <Input
             id="lyrics-file"
             type="file"
-            accept=".txt,.lrc,.md,.text,text/plain"
+            accept=".txt,.srt,.lrc,.md,.text,text/plain,application/x-subrip"
             onChange={(e) => {
               void onLyricsFile(e.target.files?.[0] || null);
               e.target.value = "";
             }}
           />
           <p className="text-xs text-zinc-500">
-            Choose a text file and it fills the lyrics box below (you can still edit after).
+            .srt files keep timestamps for the live lyric + review panel. Plain .txt still works.
           </p>
         </div>
 
@@ -307,8 +325,10 @@ export default function PublishPage() {
             placeholder={"VERSE 1\n\nLine one\nLine two\n\nCHORUS\n\nHook line"}
           />
           <p className="text-xs text-zinc-500">
-            One line per row. Optional labels: VERSE 1, CHORUS, BRIDGE, OUTRO. Blank lines
-            separate sections. {lineCount > 0 ? `${lineCount} lines ready for song.json.` : ""}
+            Paste plain lyrics or full .srt content.{" "}
+            {lineCount > 0
+              ? `${lineCount} lines ready${timedCount ? ` (${timedCount} timed)` : ""}.`
+              : ""}
           </p>
           {previewLines.length > 0 ? (
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
@@ -316,6 +336,11 @@ export default function PublishPage() {
               <ul className="space-y-1">
                 {previewLines.map((l, i) => (
                   <li key={`${l.line_number}-${i}`}>
+                    {l.start != null ? (
+                      <span className="text-emerald-400/80">
+                        [{l.start.toFixed(1)}s]{" "}
+                      </span>
+                    ) : null}
                     {l.section_label ? (
                       <span className="text-purple-400">{l.section_label}: </span>
                     ) : null}

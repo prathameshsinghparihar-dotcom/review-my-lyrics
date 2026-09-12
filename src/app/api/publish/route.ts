@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { createServiceSupabase } from "@/lib/supabase/service";
 import { LIBRARY_BUCKET } from "@/lib/supabase/public";
-import { parseLyrics, slugify, uniqueSlug } from "@/lib/utils";
+import { parseLyricsInput, slugify, uniqueSlug } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
@@ -84,10 +84,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const parsed = parseLyrics(lyricsRaw);
+    const parsed = parseLyricsInput(lyricsRaw);
     if (!parsed.length) {
       return NextResponse.json(
-        { error: "No lyric lines found. Paste one line per row." },
+        {
+          error:
+            "No lyric lines found. Paste lyrics or upload a .txt / .srt file (one line per row, or SubRip cues).",
+        },
         { status: 400 }
       );
     }
@@ -100,6 +103,8 @@ export async function POST(request: Request) {
       lyrics: parsed.map((line) => ({
         text: line.text,
         ...(line.section_label ? { section: line.section_label } : {}),
+        ...(line.start != null ? { start: line.start } : {}),
+        ...(line.end != null ? { end: line.end } : {}),
       })),
     };
 

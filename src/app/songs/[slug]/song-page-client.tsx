@@ -5,13 +5,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Heart, Star } from "lucide-react";
 import { toast } from "sonner";
 import { AudioPlayer } from "@/components/music/audio-player";
-import { LyricsViewer } from "@/components/lyrics/lyrics-viewer";
+import { LyricsViewer, type ReactionUpdate } from "@/components/lyrics/lyrics-viewer";
+import { TimedLyricsReview } from "@/components/lyrics/timed-lyrics-review";
 import { ReviewCard } from "@/components/reviews/review-card";
 import { ReviewForm } from "@/components/reviews/review-form";
 import { RatingStars } from "@/components/reviews/rating-stars";
 import { Button } from "@/components/ui/button";
 import { useAudio } from "@/components/providers/audio-provider";
 import {
+  getGuestReaction,
   getGuestReview,
   isGuestFavorite,
   setGuestReview,
@@ -32,17 +34,36 @@ interface SongPageClientProps {
   guestMode?: boolean;
 }
 
+function mergeGuestIntoLyrics(initial: LyricLineWithReactions[]) {
+  return initial.map((line) => {
+    const guest = getGuestReaction(line.id);
+    if (!guest || line.user_reaction) return line;
+    return {
+      ...line,
+      user_reaction: guest,
+      heart_count: line.heart_count + (guest === "heart" ? 1 : 0),
+      like_count: line.like_count + (guest === "like" ? 1 : 0),
+      dislike_count: line.dislike_count + (guest === "dislike" ? 1 : 0),
+    };
+  });
+}
+
 export function SongPageClient({
   song,
-  lyrics,
+  lyrics: initialLyrics,
   reviews: initialReviews,
   distribution,
 }: SongPageClientProps) {
-  const { currentTime, seek, track, playTrack } = useAudio();
+  const { currentTime, seek, track, playTrack, isPlaying } = useAudio();
   const [favorited, setFavorited] = useState(false);
   const [reviews, setReviews] = useState(initialReviews);
   const [sort, setSort] = useState<"newest" | "highest" | "lowest">("newest");
   const [editing, setEditing] = useState(false);
+  const [lyricLines, setLyricLines] = useState(initialLyrics);
+
+  useEffect(() => {
+    setLyricLines(mergeGuestIntoLyrics(initialLyrics));
+  }, [initialLyrics]);
 
   useEffect(() => {
     setFavorited(isGuestFavorite(song.id));
@@ -79,6 +100,7 @@ export function SongPageClient({
   );
 
   const activeTime = track?.id === song.id ? currentTime : 0;
+  const songIsPlaying = track?.id === song.id && isPlaying;
   const totalReviews = reviews.length;
   const avg =
     totalReviews > 0
@@ -101,6 +123,22 @@ export function SongPageClient({
     }
     return dist;
   }, [distribution, reviews]);
+
+  const onLyricReactionChange = (id: string, next: ReactionUpdate) => {
+    setLyricLines((prev) =>
+      prev.map((l) =>
+        l.id === id
+          ? {
+              ...l,
+              heart_count: next.heartCount,
+              like_count: next.likeCount,
+              dislike_count: next.dislikeCount,
+              user_reaction: next.userReaction,
+            }
+          : l
+      )
+    );
+  };
 
   const toggleFavorite = () => {
     const next = toggleGuestFavorite(song.id);
@@ -146,7 +184,7 @@ export function SongPageClient({
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 md:px-6 md:py-10">
-      <div className="mb-8 grid gap-6 md:grid-cols-[200px_1fr] md:items-end">
+      <div className="mb-8 grid gap-6 lg:grid-cols-[200px_minmax(260px,380px)_minmax(0,1fr)] lg:items-start">
         <div className="relative mx-auto aspect-square w-48 overflow-hidden rounded-2xl bg-zinc-800 shadow-2xl md:mx-0 md:w-full">
           {song.cover_url ? (
             <Image
@@ -163,6 +201,14 @@ export function SongPageClient({
             </div>
           )}
         </div>
+
+        <TimedLyricsReview
+          lines={lyricLines}
+          currentTime={activeTime}
+          isPlaying={songIsPlaying}
+          onReactionChange={onLyricReactionChange}
+        />
+
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-purple-400">
             {song.genre || "Song"}
@@ -230,9 +276,15 @@ export function SongPageClient({
         <div>
           <h2 className="mb-4 text-xl font-semibold text-zinc-50">Lyrics</h2>
           <p className="mb-4 text-sm text-zinc-500">
-            React to every line. Tap a timestamped line to seek.
+            React to every line below, or use the live panel beside the cover when the song has
+            timed <code>.srt</code> lyrics. Tap a timestamped line to seek.
           </p>
-          <LyricsViewer lines={lyrics} currentTime={activeTime} onSeek={seek} />
+          <LyricsViewer
+            lines={lyricLines}
+            currentTime={activeTime}
+            onSeek={seek}
+            onReactionChange={onLyricReactionChange}
+          />
         </div>
 
         <aside className="space-y-6">

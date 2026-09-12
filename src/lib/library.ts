@@ -41,9 +41,26 @@ export interface LibrarySong {
 
 const AUDIO_EXTS = [".mp3", ".wav", ".m4a", ".ogg", ".webm"];
 const COVER_EXTS = [".jpg", ".jpeg", ".png", ".webp"];
+const SUPABASE_TIMEOUT_MS = 8000;
 
 function libraryRoot() {
   return path.join(process.cwd(), "public", "library", "songs");
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 function findFile(dir: string, basenames: string[], exts: string[]): string | null {
@@ -74,6 +91,32 @@ function readMeta(dir: string): LibrarySongMeta | null {
   }
 }
 
+function loadLocalSong(slug: string): LibrarySong | null {
+  const dir = path.join(libraryRoot(), slug);
+  if (!fs.existsSync(dir)) return null;
+  const meta = readMeta(dir);
+  if (!meta) return null;
+  const audioFile = findFile(dir, ["audio", "song", "track"], AUDIO_EXTS);
+  if (!audioFile) return null;
+  const coverFile = findFile(dir, ["cover", "artwork", "art", "image"], COVER_EXTS);
+  return {
+    slug,
+    title: meta.title,
+    artist: meta.artist,
+    genre: meta.genre || "Other",
+    description: meta.description || "",
+    coverUrl: coverFile ? `/library/songs/${slug}/${coverFile}` : null,
+    audioUrl: `/library/songs/${slug}/${audioFile}`,
+    lyrics: meta.lyrics.map((l) => ({
+      text: l.text,
+      section: l.section ?? null,
+      start: l.start ?? null,
+      end: l.end ?? null,
+    })),
+    source: "local",
+  };
+}
+
 function loadLocalLibrarySongs(): LibrarySong[] {
   const root = libraryRoot();
   if (!fs.existsSync(root)) return [];
@@ -83,32 +126,8 @@ function loadLocalLibrarySongs(): LibrarySong[] {
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const slug = entry.name;
-    const dir = path.join(root, slug);
-    const meta = readMeta(dir);
-    if (!meta) continue;
-
-    const audioFile = findFile(dir, ["audio", "song", "track"], AUDIO_EXTS);
-    if (!audioFile) continue;
-
-    const coverFile = findFile(dir, ["cover", "artwork", "art", "image"], COVER_EXTS);
-
-    songs.push({
-      slug,
-      title: meta.title,
-      artist: meta.artist,
-      genre: meta.genre || "Other",
-      description: meta.description || "",
-      coverUrl: coverFile ? `/library/songs/${slug}/${coverFile}` : null,
-      audioUrl: `/library/songs/${slug}/${audioFile}`,
-      lyrics: meta.lyrics.map((l) => ({
-        text: l.text,
-        section: l.section ?? null,
-        start: l.start ?? null,
-        end: l.end ?? null,
-      })),
-      source: "local",
-    });
+    const song = loadLocalSong(entry.name);
+    if (song) songs.push(song);
   }
 
   return songs;
@@ -126,74 +145,113 @@ function pickByExt(names: string[], exts: string[], preferred: string[]): string
   return names.find((n) => exts.includes(path.extname(n).toLowerCase())) || null;
 }
 
+function metaToSong(
+  slug: string,
+  meta: LibrarySongMeta,
+  audioFile: string,
+  coverFile: string | null,
+  source: "supabase" | "local"
+): LibrarySong {
+  const prefix = `songs/${slug}`;
+  return {
+    slug,
+    title: meta.title,
+    artist: meta.artist,
+    genre: meta.genre || "Other",
+    description: meta.description || "",
+    coverUrl:
+      source === "supabase"
+        ? coverFile
+          ? publicObjectUrl(`${prefix}/${coverFile}`)
+          : null
+        : coverFile
+          ? `/library/songs/${slug}/${coverFile}`
+          : null,
+    audioUrl:
+      source === "supabase"
+        ? publicObjectUrl(`${prefix}/${audioFile}`)
+        : `/library/songs/${slug}/${audioFile}`,
+    lyrics: meta.lyrics.map((l) => ({
+      text: l.text,
+      section: l.section ?? null,
+      start: l.start ?? null,
+      end: l.end ?? null,
+    })),
+    source,
+  };
+}
+
+async function loadSupabaseSong(slug: string): Promise<LibrarySong | null> {
+  const supabase = createPublicSupabase();
+  if (!supabase) return null;
+
+  const prefix = `songs/${slug}`;
+
+  try {
+    const { data: files, error: listError } = await withTimeout(
+      supabase.storage.from(LIBRARY_BUCKET).list(prefix, { limit: 50 }),
+      SUPABASE_TIMEOUT_MS,
+      `list ${prefix}`
+    );
+
+    if (listError || !files?.length) return null;
+
+    const names = files.map((f) => f.name);
+    if (!names.includes("song.json")) return null;
+
+    const audioFile = pickByExt(names, AUDIO_EXTS, ["audio", "song", "track"]);
+    if (!audioFile) return null;
+    const coverFile = pickByExt(names, COVER_EXTS, ["cover", "artwork", "art", "image"]);
+
+    const { data: metaBlob, error: dlError } = await withTimeout(
+      supabase.storage.from(LIBRARY_BUCKET).download(`${prefix}/song.json`),
+      SUPABASE_TIMEOUT_MS,
+      `download ${prefix}/song.json`
+    );
+
+    if (dlError || !metaBlob) return null;
+
+    const meta = JSON.parse(await metaBlob.text()) as LibrarySongMeta;
+    if (!meta.title || !meta.artist || !Array.isArray(meta.lyrics)) return null;
+
+    return metaToSong(slug, meta, audioFile, coverFile, "supabase");
+  } catch (err) {
+    console.warn(`[library] Supabase song "${slug}" failed:`, err);
+    return null;
+  }
+}
+
 async function loadSupabaseLibrarySongs(): Promise<LibrarySong[]> {
   const supabase = createPublicSupabase();
   if (!supabase) return [];
 
-  const { data: folders, error } = await supabase.storage
-    .from(LIBRARY_BUCKET)
-    .list("songs", { limit: 200, sortBy: { column: "name", order: "asc" } });
+  try {
+    const { data: folders, error } = await withTimeout(
+      supabase.storage
+        .from(LIBRARY_BUCKET)
+        .list("songs", { limit: 200, sortBy: { column: "name", order: "asc" } }),
+      SUPABASE_TIMEOUT_MS,
+      "list songs"
+    );
 
-  if (error || !folders?.length) {
-    if (error) console.warn("[library] Supabase list error:", error.message);
-    return [];
-  }
-
-  const songs: LibrarySong[] = [];
-
-  for (const folder of folders) {
-    // Skip placeholder files; song folders are listed as prefix entries
-    if (folder.name.startsWith(".")) continue;
-    const slug = folder.name;
-    const prefix = `songs/${slug}`;
-
-    const { data: files, error: listError } = await supabase.storage
-      .from(LIBRARY_BUCKET)
-      .list(prefix, { limit: 50 });
-
-    if (listError || !files?.length) continue;
-
-    const names = files.map((f) => f.name);
-    if (!names.includes("song.json")) continue;
-
-    const audioFile = pickByExt(names, AUDIO_EXTS, ["audio", "song", "track"]);
-    if (!audioFile) continue;
-
-    const coverFile = pickByExt(names, COVER_EXTS, ["cover", "artwork", "art", "image"]);
-
-    const { data: metaBlob, error: dlError } = await supabase.storage
-      .from(LIBRARY_BUCKET)
-      .download(`${prefix}/song.json`);
-
-    if (dlError || !metaBlob) continue;
-
-    let meta: LibrarySongMeta;
-    try {
-      meta = JSON.parse(await metaBlob.text()) as LibrarySongMeta;
-      if (!meta.title || !meta.artist || !Array.isArray(meta.lyrics)) continue;
-    } catch {
-      continue;
+    if (error || !folders?.length) {
+      if (error) console.warn("[library] Supabase list error:", error.message);
+      return [];
     }
 
-    songs.push({
-      slug,
-      title: meta.title,
-      artist: meta.artist,
-      genre: meta.genre || "Other",
-      description: meta.description || "",
-      coverUrl: coverFile ? publicObjectUrl(`${prefix}/${coverFile}`) : null,
-      audioUrl: publicObjectUrl(`${prefix}/${audioFile}`),
-      lyrics: meta.lyrics.map((l) => ({
-        text: l.text,
-        section: l.section ?? null,
-        start: l.start ?? null,
-        end: l.end ?? null,
-      })),
-      source: "supabase",
-    });
-  }
+    const songs: LibrarySong[] = [];
 
-  return songs;
+    for (const folder of folders) {
+      if (folder.name.startsWith(".")) continue;
+      const song = await loadSupabaseSong(folder.name);
+      if (song) songs.push(song);
+    }
+
+    return songs;
+  } catch (err) {
+    console.warn("[library] Supabase library load failed:", err);
+    return [];
+  }
 }
 
 function mergeSongs(remote: LibrarySong[], local: LibrarySong[]): LibrarySong[] {
@@ -225,9 +283,22 @@ export async function loadLibrarySongs(): Promise<LibrarySong[]> {
   }
 }
 
+/** Fast path for song pages — avoid listing the whole bucket. */
 export async function getLibrarySong(slug: string): Promise<LibrarySong | null> {
-  const songs = await loadLibrarySongs();
-  return songs.find((s) => s.slug === slug) || null;
+  const local = loadLocalSong(slug);
+
+  if (!isSupabaseConfigured()) return local;
+
+  // If we already have a local copy, don't block navigation on a slow Supabase call
+  try {
+    const remote = local
+      ? await withTimeout(loadSupabaseSong(slug), 2500, `song ${slug}`)
+      : await loadSupabaseSong(slug);
+    return remote || local;
+  } catch (err) {
+    console.warn(`[library] getLibrarySong("${slug}") falling back to local:`, err);
+    return local;
+  }
 }
 
 export function libraryToCard(song: LibrarySong): SongCardData {

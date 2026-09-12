@@ -29,3 +29,5 @@ Only folders that contain **both** `song.json` and an audio file are shown.
   ]
 }
 ```
+
+`start` / `end` are seconds. Upload a `.srt` on `/publish` to fill them automatically for the live lyric + review panel beside the cover.

@@ -6,30 +6,45 @@ import { LyricSection } from "@/components/lyrics/lyric-section";
 import { getGuestReaction } from "@/lib/guest-storage";
 import type { LyricLineWithReactions, ReactionType } from "@/types/database";
 
+export type ReactionUpdate = {
+  heartCount: number;
+  likeCount: number;
+  dislikeCount: number;
+  userReaction: ReactionType | null;
+};
+
 interface LyricsViewerProps {
   lines: LyricLineWithReactions[];
   currentTime: number;
   onSeek: (time: number) => void;
-  activeSongId?: string;
+  /** When provided, parent owns reaction state (keeps timed panel in sync). */
+  onReactionChange?: (id: string, next: ReactionUpdate) => void;
 }
 
-export function LyricsViewer({ lines: initial, currentTime, onSeek }: LyricsViewerProps) {
+function mergeGuestReactions(initial: LyricLineWithReactions[]) {
+  return initial.map((line) => {
+    const guest = getGuestReaction(line.id);
+    if (!guest || line.user_reaction) return line;
+    return {
+      ...line,
+      user_reaction: guest,
+      heart_count: line.heart_count + (guest === "heart" ? 1 : 0),
+      like_count: line.like_count + (guest === "like" ? 1 : 0),
+      dislike_count: line.dislike_count + (guest === "dislike" ? 1 : 0),
+    };
+  });
+}
+
+export function LyricsViewer({
+  lines: initial,
+  currentTime,
+  onSeek,
+  onReactionChange: onReactionChangeProp,
+}: LyricsViewerProps) {
   const [lines, setLines] = useState(initial);
 
   useEffect(() => {
-    setLines(
-      initial.map((line) => {
-        const guest = getGuestReaction(line.id);
-        if (!guest || line.user_reaction) return line;
-        return {
-          ...line,
-          user_reaction: guest,
-          heart_count: line.heart_count + (guest === "heart" ? 1 : 0),
-          like_count: line.like_count + (guest === "like" ? 1 : 0),
-          dislike_count: line.dislike_count + (guest === "dislike" ? 1 : 0),
-        };
-      })
-    );
+    setLines(mergeGuestReactions(initial));
   }, [initial]);
 
   const activeId = useMemo(() => {
@@ -41,7 +56,6 @@ export function LyricsViewer({ lines: initial, currentTime, onSeek }: LyricsView
       const end = line.end_time ?? Number.POSITIVE_INFINITY;
       if (t >= start && t < end) return line.id;
     }
-    // fallback: last line whose start has passed
     let last: string | null = null;
     for (const line of timed) {
       if ((line.start_time ?? 0) <= t) last = line.id;
@@ -63,15 +77,7 @@ export function LyricsViewer({ lines: initial, currentTime, onSeek }: LyricsView
     return groups;
   }, [lines]);
 
-  const onReactionChange = (
-    id: string,
-    next: {
-      heartCount: number;
-      likeCount: number;
-      dislikeCount: number;
-      userReaction: ReactionType | null;
-    }
-  ) => {
+  const onReactionChange = (id: string, next: ReactionUpdate) => {
     setLines((prev) =>
       prev.map((l) =>
         l.id === id
@@ -85,6 +91,7 @@ export function LyricsViewer({ lines: initial, currentTime, onSeek }: LyricsView
           : l
       )
     );
+    onReactionChangeProp?.(id, next);
   };
 
   if (!lines.length) {

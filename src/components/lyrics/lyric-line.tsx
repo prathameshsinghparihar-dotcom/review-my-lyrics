@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { LyricReaction } from "@/components/lyrics/lyric-reaction";
 import type { LyricLineWithReactions, ReactionType } from "@/types/database";
 import { cn } from "@/lib/utils";
@@ -26,21 +25,10 @@ export function LyricLine({
   onSeek,
   onReactionChange,
 }: LyricLineProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!isActive || !ref.current) return;
-    ref.current.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
-  }, [isActive]);
-
   const canSeek = line.start_time != null;
 
   return (
     <div
-      ref={ref}
       role={canSeek ? "button" : undefined}
       tabIndex={canSeek ? 0 : undefined}
       onClick={() => {
